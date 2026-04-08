@@ -1,0 +1,10 @@
+App(
+    appid="retroclock",
+    name="Retro Clock",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="crt_clock_app",
+    requires=["gui"],
+    stack_size=1 * 1024,
+    #fap_icon="crt_clock_icon.png",  
+    fap_category="Clock",
+)
