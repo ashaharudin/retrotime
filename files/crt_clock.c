@@ -15,8 +15,8 @@
 #define SCREEN_H 64
 
 // Beam sweep config
-#define BEAM_WIDTH   39   // px -- inversion stripe width
-#define TRAIL_WIDTH  1  // px -- erased wake behind beam
+#define BEAM_WIDTH   32   // px -- inversion stripe width
+#define TRAIL_WIDTH  16  // px -- erased wake behind beam
 #define BEAM_STEP    3   // px per frame the beam advances
 
 // App state
@@ -112,9 +112,9 @@ static void draw_time_clipped(
 static void draw_frame(Canvas* canvas) {
     canvas_set_color(canvas, ColorBlack);
     //canvas_draw_frame(canvas, 0, 0, SCREEN_W, SCREEN_H);
-    canvas_set_font(canvas, FontSecondary);
-    // canvas_draw_str(canvas, 3, 9, "[ CRT ]");
-    // canvas_draw_str(canvas, 100, 9, "_");
+    //canvas_set_font(canvas, FontSecondary);
+    //canvas_draw_str(canvas, 3, 9, "[ CRT ]");
+    //canvas_draw_str(canvas, 100, 9, "_");
 }
 
 // Apply horizontal scanline gaps (every odd row erased)
@@ -184,8 +184,12 @@ int32_t crt_clock_app(void* p) {
 
     CrtClockApp* app = malloc(sizeof(CrtClockApp));
     app->running = true;
-    app->beam_x  = -TRAIL_WIDTH; // start with beam off-screen so it sweeps in
+    app->beam_x  = -(TRAIL_WIDTH + BEAM_WIDTH); // fully off-screen left
     app->event_queue = furi_message_queue_alloc(8, sizeof(InputEvent));
+
+    // Advance beam once before registering the viewport so the very
+    // first render callback never sees the raw init value
+    app->beam_x += BEAM_STEP;
 
     ViewPort* vp = view_port_alloc();
     view_port_draw_callback_set(vp, render_callback, app);
@@ -209,7 +213,7 @@ int32_t crt_clock_app(void* p) {
 
         app->beam_x += BEAM_STEP;
         if(app->beam_x >= SCREEN_W + TRAIL_WIDTH) {
-            app->beam_x = -BEAM_STEP;
+            app->beam_x = -(TRAIL_WIDTH + BEAM_WIDTH); // wrap fully off-screen
         }
 
         view_port_update(vp);
