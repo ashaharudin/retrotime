@@ -184,7 +184,7 @@ int32_t crt_clock_app(void* p) {
 
     CrtClockApp* app = malloc(sizeof(CrtClockApp));
     app->running = true;
-    app->beam_x  = 0;
+    app->beam_x  = -TRAIL_WIDTH; // start with beam off-screen so it sweeps in
     app->event_queue = furi_message_queue_alloc(8, sizeof(InputEvent));
 
     ViewPort* vp = view_port_alloc();
@@ -209,7 +209,7 @@ int32_t crt_clock_app(void* p) {
 
         app->beam_x += BEAM_STEP;
         if(app->beam_x >= SCREEN_W + TRAIL_WIDTH) {
-            app->beam_x = 0;
+            app->beam_x = -BEAM_STEP;
         }
 
         view_port_update(vp);
