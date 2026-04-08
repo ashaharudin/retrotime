@@ -118,14 +118,14 @@ static void draw_frame(Canvas* canvas) {
 }
 
 // Apply horizontal scanline gaps (every odd row erased)
-static void draw_scanlines(Canvas* canvas) {
-    canvas_set_color(canvas, ColorWhite);
-    for(int y = 1; y < SCREEN_H; y += 2) {
-        for(int x = 0; x < SCREEN_W; x++) {
-            canvas_draw_dot(canvas, x, y);
-        }
-    }
-}
+// static void draw_scanlines(Canvas* canvas) {
+//     canvas_set_color(canvas, ColorWhite);
+//     for(int y = 1; y < SCREEN_H; y += 2) {
+//         for(int x = 0; x < SCREEN_W; x++) {
+//             canvas_draw_dot(canvas, x, y);
+//         }
+//     }
+// }
 
 // Draw the beam: erase trail, then fill beam columns black (so
 // the inverted glyphs drawn on top are visible against a black band)
@@ -169,7 +169,7 @@ static void render_callback(Canvas* canvas, void* ctx) {
                       app->beam_x, app->beam_x + BEAM_WIDTH);
 
     // Layer 4: scanlines over everything
-    draw_scanlines(canvas);
+    //draw_scanlines(canvas);
 }
 
 // Input callback
