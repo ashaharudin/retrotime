@@ -15,8 +15,8 @@
 #define SCREEN_H 64
 
 // Beam sweep config
-#define BEAM_WIDTH   16   // px -- inversion stripe width
-#define TRAIL_WIDTH  16  // px -- erased wake behind beam
+#define BEAM_WIDTH   39   // px -- inversion stripe width
+#define TRAIL_WIDTH  1  // px -- erased wake behind beam
 #define BEAM_STEP    3   // px per frame the beam advances
 
 // App state
@@ -194,6 +194,10 @@ int32_t crt_clock_app(void* p) {
     Gui* gui = furi_record_open(RECORD_GUI);
     gui_add_view_port(gui, vp, GuiLayerFullscreen);
 
+    // Keep backlight on for the duration of the app
+    NotificationApp* notifications = furi_record_open(RECORD_NOTIFICATION);
+    notification_message(notifications, &sequence_display_backlight_enforce_on);
+
     InputEvent event;
     while(app->running) {
         if(furi_message_queue_get(app->event_queue, &event, 50) == FuriStatusOk) {
@@ -210,6 +214,10 @@ int32_t crt_clock_app(void* p) {
 
         view_port_update(vp);
     }
+
+    // Release backlight enforce before exit
+    notification_message(notifications, &sequence_display_backlight_enforce_auto);
+    furi_record_close(RECORD_NOTIFICATION);
 
     gui_remove_view_port(gui, vp);
     furi_record_close(RECORD_GUI);
