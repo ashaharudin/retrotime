@@ -199,8 +199,8 @@ int32_t crt_clock_app(void* p) {
     gui_add_view_port(gui, vp, GuiLayerFullscreen);
 
     // Keep backlight on for the duration of the app
-    NotificationApp* notifications = furi_record_open(RECORD_NOTIFICATION);
-    notification_message(notifications, &sequence_display_backlight_enforce_on);
+    // NotificationApp* notifications = furi_record_open(RECORD_NOTIFICATION);
+    // notification_message(notifications, &sequence_display_backlight_enforce_on);
 
     InputEvent event;
     while(app->running) {
@@ -220,8 +220,8 @@ int32_t crt_clock_app(void* p) {
     }
 
     // Release backlight enforce before exit
-    notification_message(notifications, &sequence_display_backlight_enforce_auto);
-    furi_record_close(RECORD_NOTIFICATION);
+    // notification_message(notifications, &sequence_display_backlight_enforce_auto);
+    // furi_record_close(RECORD_NOTIFICATION);
 
     gui_remove_view_port(gui, vp);
     furi_record_close(RECORD_GUI);
