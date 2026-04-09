@@ -16,8 +16,9 @@
 
 // Beam sweep config
 #define BEAM_WIDTH   4   // px -- inversion stripe width
-#define TRAIL_WIDTH  32  // px -- erased wake behind beam
+#define TRAIL_WIDTH  48  // px -- erased wake behind beam
 #define BEAM_STEP    1   // px per frame the beam advances
+#define ERASE_LEAD   20  // px -- how far the erase beam leads the reveal beam
 
 // Screen modes
 typedef enum {
@@ -30,7 +31,7 @@ typedef struct {
     FuriMessageQueue* event_queue;
     bool running;
     bool beamstart;
-    int beam_x;
+    int beam_x;   // reveal beam position
     ScreenMode mode;
     bool backlight_on; // true = always on, false = auto
     NotificationApp* notifications;
@@ -199,10 +200,21 @@ static void draw_frame(Canvas* canvas) {
     //canvas_draw_str(canvas, 100, 9, "_");
 }
 
-// Draw the beam: erase trail, then fill beam columns black (so
-// the inverted glyphs drawn on top are visible against a black band)
+// Draw the beam:
+//   1. Erase lead  -- solid white stripe ahead of the beam, hides text before reveal
+//   2. Noisy trail -- LFSR noise wake behind the beam
+//   3. Beam stripe -- solid black, inversion background
 static void draw_beam(Canvas* canvas, int beam_x) {
-    // Erase trail with noise using a simple LFSR -- no rand(), safe on any thread
+    // 1. Erase lead: white zone from beam_x to beam_x + ERASE_LEAD
+    canvas_set_color(canvas, ColorWhite);
+    for(int x = beam_x; x < beam_x + ERASE_LEAD && x < SCREEN_W; x++) {
+        if(x < 0) continue;
+        for(int y = 0; y < SCREEN_H; y++) {
+            canvas_draw_dot(canvas, x, y);
+        }
+    }
+
+    // 2. Noisy trail behind the beam
     static uint16_t lfsr = 0xACE1u;
     for(int x = beam_x - TRAIL_WIDTH; x < beam_x; x++) {
         if(x < 0 || x >= SCREEN_W) continue;
@@ -213,7 +225,7 @@ static void draw_beam(Canvas* canvas, int beam_x) {
         }
     }
 
-    // Fill beam stripe black (the inversion background)
+    // 3. Beam stripe black (inversion background)
     canvas_set_color(canvas, ColorBlack);
     for(int x = beam_x; x < beam_x + BEAM_WIDTH && x < SCREEN_W; x++) {
         for(int y = 0; y < SCREEN_H; y++) {
@@ -243,11 +255,11 @@ static void render_callback(Canvas* canvas, void* ctx) {
 
     // Layers 2 & 3 only active while beam is sweeping
     if(app->beamstart) {
-        // Layer 2: beam (erases trail, fills beam stripe black)
+        // Layer 2: beam (erase lead + noisy trail + black stripe)
         draw_beam(canvas, app->beam_x);
 
-        // Layer 3: redraw time and date in WHITE within beam stripe
-        //          -- this is the inversion effect
+        // Layer 3: redraw text in WHITE only in the revealed zone
+        //          (trail behind beam, before erase lead wipes ahead)
         draw_time_clipped(canvas, &dt, ColorWhite,
                           app->beam_x - TRAIL_WIDTH, app->beam_x + BEAM_WIDTH);
         draw_date_clipped(canvas, &dt, ColorWhite,
@@ -328,8 +340,8 @@ int32_t crt_clock_app(void* p) {
         if(app->beamstart) {
             app->beam_x += BEAM_STEP;
             if(app->beam_x >= SCREEN_W + TRAIL_WIDTH) {
-                app->beamstart = false; // reset to wait for the next 10-second interval
-                app->beam_x = -(BEAM_WIDTH); // wrap fully off-screen
+                app->beamstart = false;
+                app->beam_x = -(BEAM_WIDTH);
             }
         }
 
