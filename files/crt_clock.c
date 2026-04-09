@@ -15,14 +15,15 @@
 #define SCREEN_H 64
 
 // Beam sweep config
-#define BEAM_WIDTH   8   // px -- inversion stripe width
-#define TRAIL_WIDTH  12  // px -- erased wake behind beam
-#define BEAM_STEP    2   // px per frame the beam advances
+#define BEAM_WIDTH   4   // px -- inversion stripe width
+#define TRAIL_WIDTH  32  // px -- erased wake behind beam
+#define BEAM_STEP    1   // px per frame the beam advances
 
 // App state
 typedef struct {
     FuriMessageQueue* event_queue;
     bool running;
+    bool beamstart;
     int beam_x;
 } CrtClockApp;
 
@@ -152,18 +153,23 @@ static void render_callback(Canvas* canvas, void* ctx) {
 
     DateTime dt;
     furi_hal_rtc_get_datetime(&dt);
+    if(dt.second % 10 == 0 && !app->beamstart) {
+            app->beamstart = true; // start the beam sweep on the first frame of each 10 second interval
+    }
 
     // Layer 1: frame and normal black digits
     draw_frame(canvas);
     draw_time_clipped(canvas, &dt, ColorBlack, 0, SCREEN_W);
 
     // Layer 2: beam (erases trail, fills beam stripe black)
-    draw_beam(canvas, app->beam_x);
-
+    if(app->beamstart) {
+        draw_beam(canvas, app->beam_x);
+    }
+    
     // Layer 3: redraw digits in WHITE only within the beam stripe
     //          -- this is the inversion effect
     draw_time_clipped(canvas, &dt, ColorWhite,
-                      app->beam_x, app->beam_x + BEAM_WIDTH);
+                      app->beam_x - TRAIL_WIDTH, app->beam_x + BEAM_WIDTH);
 
 }
 
@@ -179,7 +185,8 @@ int32_t crt_clock_app(void* p) {
 
     CrtClockApp* app = malloc(sizeof(CrtClockApp));
     app->running = true;
-    app->beam_x  = -(TRAIL_WIDTH + BEAM_WIDTH); // fully off-screen left
+    app->beamstart = false;
+    app->beam_x  = -(BEAM_WIDTH); // fully off-screen left
     app->event_queue = furi_message_queue_alloc(8, sizeof(InputEvent));
 
     // Advance beam once before registering the viewport so the very
@@ -206,9 +213,12 @@ int32_t crt_clock_app(void* p) {
             }
         }
 
-        app->beam_x += BEAM_STEP;
-        if(app->beam_x >= SCREEN_W + TRAIL_WIDTH) {
-            app->beam_x = -(TRAIL_WIDTH + BEAM_WIDTH); // wrap fully off-screen
+        if(app->beamstart) {
+            app->beam_x += BEAM_STEP;
+            if(app->beam_x >= SCREEN_W + TRAIL_WIDTH) {
+                app->beamstart = false; // reset to wait for the next 10-second interval
+                app->beam_x = -(BEAM_WIDTH); // wrap fully off-screen
+            } // start the beam on the first loop iteration after init
         }
 
         view_port_update(vp);
