@@ -15,9 +15,9 @@
 #define SCREEN_H 64
 
 // Beam sweep config
-#define BEAM_WIDTH   32   // px -- inversion stripe width
-#define TRAIL_WIDTH  16  // px -- erased wake behind beam
-#define BEAM_STEP    3   // px per frame the beam advances
+#define BEAM_WIDTH   8   // px -- inversion stripe width
+#define TRAIL_WIDTH  12  // px -- erased wake behind beam
+#define BEAM_STEP    2   // px per frame the beam advances
 
 // App state
 typedef struct {
@@ -89,7 +89,8 @@ static void draw_time_clipped(
     int start_x = (SCREEN_W - total_w) / 2;
     int y = (SCREEN_H - GLYPH_H) / 2;
 
-    bool colon_on = (dt->second % 2 == 0);
+    //bool colon_on = (dt->second % 2 == 0);
+    bool colon_on = true; // always on for non-blinking effect
 
     uint8_t digits[8] = {
         dt->hour   / 10, dt->hour   % 10, 10,
@@ -117,16 +118,6 @@ static void draw_frame(Canvas* canvas) {
     //canvas_draw_str(canvas, 100, 9, "_");
 }
 
-// Apply horizontal scanline gaps (every odd row erased)
-// static void draw_scanlines(Canvas* canvas) {
-//     canvas_set_color(canvas, ColorWhite);
-//     for(int y = 1; y < SCREEN_H; y += 2) {
-//         for(int x = 0; x < SCREEN_W; x++) {
-//             canvas_draw_dot(canvas, x, y);
-//         }
-//     }
-// }
-
 // Draw the beam: erase trail, then fill beam columns black (so
 // the inverted glyphs drawn on top are visible against a black band)
 static void draw_beam(Canvas* canvas, int beam_x) {
@@ -135,6 +126,12 @@ static void draw_beam(Canvas* canvas, int beam_x) {
     for(int x = beam_x - TRAIL_WIDTH; x < beam_x; x++) {
         if(x < 0 || x >= SCREEN_W) continue;
         for(int y = 0; y < SCREEN_H; y++) {
+            int n = rand() % 2; // add noise to the trail for a more "CRT-y" look
+            if(n == 0) {
+                canvas_set_color(canvas, ColorWhite);
+            } else {
+                canvas_set_color(canvas, ColorBlack);
+            }
             canvas_draw_dot(canvas, x, y);
         }
     }
@@ -168,8 +165,6 @@ static void render_callback(Canvas* canvas, void* ctx) {
     draw_time_clipped(canvas, &dt, ColorWhite,
                       app->beam_x, app->beam_x + BEAM_WIDTH);
 
-    // Layer 4: scanlines over everything
-    //draw_scanlines(canvas);
 }
 
 // Input callback
