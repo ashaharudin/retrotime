@@ -19,12 +19,21 @@
 #define TRAIL_WIDTH  32  // px -- erased wake behind beam
 #define BEAM_STEP    1   // px per frame the beam advances
 
+// Screen modes
+typedef enum {
+    ScreenClock,
+    ScreenSettings,
+} ScreenMode;
+
 // App state
 typedef struct {
     FuriMessageQueue* event_queue;
     bool running;
     bool beamstart;
     int beam_x;
+    ScreenMode mode;
+    bool backlight_on; // true = always on, false = auto
+    NotificationApp* notifications;
 } CrtClockApp;
 
 // 5x7 bitmap font: digits 0-9, then colon (index 10)
@@ -79,6 +88,20 @@ static void draw_glyph_colored(
     }
 }
 
+// Vertical layout constants
+// Time row sits in upper half, date row below it
+#define TIME_Y   14  // top of time glyphs
+#define DATE_Y   40  // baseline of date text row (~4px gap below time glyphs)
+
+static const char* const DAY_NAMES[8] = {
+    "", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"
+};
+
+static const char* const MONTH_NAMES[13] = {
+    "", "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+    "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
+};
+
 // Draw HH:MM:SS with clipping -- used for both normal and inverted pass
 static void draw_time_clipped(
     Canvas* canvas,
@@ -88,10 +111,8 @@ static void draw_time_clipped(
 {
     int total_w = 6 * GLYPH_W + 2 * 10;
     int start_x = (SCREEN_W - total_w) / 2;
-    int y = (SCREEN_H - GLYPH_H) / 2;
 
-    //bool colon_on = (dt->second % 2 == 0);
-    bool colon_on = true; // always on for non-blinking effect
+    bool colon_on = true;
 
     uint8_t digits[8] = {
         dt->hour   / 10, dt->hour   % 10, 10,
@@ -103,11 +124,70 @@ static void draw_time_clipped(
     for(int i = 0; i < 8; i++) {
         bool is_colon = (digits[i] == 10);
         if(!is_colon || colon_on) {
-            draw_glyph_colored(canvas, cursor, y, digits[i],
+            draw_glyph_colored(canvas, cursor, TIME_Y, digits[i],
                                color, x_clip_lo, x_clip_hi);
         }
         cursor += is_colon ? 10 : GLYPH_W;
     }
+}
+
+// Draw "MON  12 JAN 2025" below the time, with x clipping for beam inversion
+static void draw_date_clipped(
+    Canvas* canvas,
+    DateTime* dt,
+    Color color,
+    int x_clip_lo, int x_clip_hi)
+{
+    // Build date string: "WED  08 JAN 2025"
+    char date_str[24];
+    uint8_t wd = (dt->weekday >= 1 && dt->weekday <= 7) ? dt->weekday : 1;
+    uint8_t mo = (dt->month  >= 1 && dt->month  <= 12) ? dt->month  : 1;
+    snprintf(date_str, sizeof(date_str), "%s %02d %s%04d",
+             DAY_NAMES[wd], dt->day, MONTH_NAMES[mo], dt->year);
+
+    // Measure string width using FontSecondary (~6px per char)
+    // canvas_string_width isn't available in all SDK versions, so we estimate:
+    // FontSecondary glyphs are 6px wide including spacing
+    int char_w = 6;
+    int str_len = 0;
+    for(int i = 0; date_str[i]; i++) str_len++;
+    int str_w = str_len * char_w;
+    int x = (SCREEN_W - str_w) / 2;
+
+    canvas_set_color(canvas, color);
+    canvas_set_font(canvas, FontSecondary);
+
+    // Draw character by character so we can clip to beam region
+    for(int i = 0; i < str_len; i++) {
+        int cx = x + i * char_w;
+        // Only draw chars that overlap the clip region
+        if(cx + char_w > x_clip_lo && cx < x_clip_hi) {
+            char ch[2] = {date_str[i], 0};
+            canvas_draw_str(canvas, cx, DATE_Y, ch);
+        }
+    }
+}
+
+// Draw settings screen
+static void draw_settings(Canvas* canvas, CrtClockApp* app) {
+    canvas_clear(canvas);
+    canvas_set_color(canvas, ColorBlack);
+    canvas_set_font(canvas, FontSecondary);
+
+    canvas_draw_frame(canvas, 0, 0, SCREEN_W, SCREEN_H);
+    canvas_draw_str(canvas, 3, 9, "[ SETTINGS ]");
+    canvas_draw_str(canvas, 90, 9, "OK=toggle");
+
+    // Backlight row
+    canvas_draw_str(canvas, 4, 28, "Backlight:");
+    const char* bl_val = app->backlight_on ? "Always On" : "Auto";
+    // Highlight the value
+    canvas_draw_box(canvas, 67, 19, 56, 12);
+    canvas_set_color(canvas, ColorWhite);
+    canvas_draw_str(canvas, 69, 28, bl_val);
+
+    canvas_set_color(canvas, ColorBlack);
+    canvas_draw_str(canvas, 3, 58, "Back=return");
 }
 
 // Draw the CRT border and status label
@@ -122,17 +202,13 @@ static void draw_frame(Canvas* canvas) {
 // Draw the beam: erase trail, then fill beam columns black (so
 // the inverted glyphs drawn on top are visible against a black band)
 static void draw_beam(Canvas* canvas, int beam_x) {
-    // Erase trail
-    canvas_set_color(canvas, ColorWhite);
+    // Erase trail with noise using a simple LFSR -- no rand(), safe on any thread
+    static uint16_t lfsr = 0xACE1u;
     for(int x = beam_x - TRAIL_WIDTH; x < beam_x; x++) {
         if(x < 0 || x >= SCREEN_W) continue;
         for(int y = 0; y < SCREEN_H; y++) {
-            int n = rand() % 2; // add noise to the trail for a more "CRT-y" look
-            if(n == 0) {
-                canvas_set_color(canvas, ColorWhite);
-            } else {
-                canvas_set_color(canvas, ColorBlack);
-            }
+            lfsr = (lfsr >> 1) ^ (-(lfsr & 1u) & 0xB400u); // Galois LFSR
+            canvas_set_color(canvas, (lfsr & 1) ? ColorBlack : ColorWhite);
             canvas_draw_dot(canvas, x, y);
         }
     }
@@ -149,28 +225,34 @@ static void draw_beam(Canvas* canvas, int beam_x) {
 // Render callback
 static void render_callback(Canvas* canvas, void* ctx) {
     CrtClockApp* app = ctx;
+
+    if(app->mode == ScreenSettings) {
+        draw_settings(canvas, app);
+        return;
+    }
+
     canvas_clear(canvas);
 
     DateTime dt;
     furi_hal_rtc_get_datetime(&dt);
-    if(dt.second % 10 == 0 && !app->beamstart) {
-            app->beamstart = true; // start the beam sweep on the first frame of each 10 second interval
-    }
 
-    // Layer 1: frame and normal black digits
+    // Layer 1: frame, time and date in black
     draw_frame(canvas);
     draw_time_clipped(canvas, &dt, ColorBlack, 0, SCREEN_W);
+    draw_date_clipped(canvas, &dt, ColorBlack, 0, SCREEN_W);
 
-    // Layer 2: beam (erases trail, fills beam stripe black)
+    // Layers 2 & 3 only active while beam is sweeping
     if(app->beamstart) {
+        // Layer 2: beam (erases trail, fills beam stripe black)
         draw_beam(canvas, app->beam_x);
-    }
-    
-    // Layer 3: redraw digits in WHITE only within the beam stripe
-    //          -- this is the inversion effect
-    draw_time_clipped(canvas, &dt, ColorWhite,
-                      app->beam_x - TRAIL_WIDTH, app->beam_x + BEAM_WIDTH);
 
+        // Layer 3: redraw time and date in WHITE within beam stripe
+        //          -- this is the inversion effect
+        draw_time_clipped(canvas, &dt, ColorWhite,
+                          app->beam_x - TRAIL_WIDTH, app->beam_x + BEAM_WIDTH);
+        draw_date_clipped(canvas, &dt, ColorWhite,
+                          app->beam_x - TRAIL_WIDTH, app->beam_x + BEAM_WIDTH);
+    }
 }
 
 // Input callback
@@ -179,15 +261,26 @@ static void input_callback(InputEvent* event, void* ctx) {
     furi_message_queue_put(app->event_queue, event, FuriWaitForever);
 }
 
+// Apply backlight setting via notification service
+static void apply_backlight(CrtClockApp* app) {
+    if(app->backlight_on) {
+        notification_message(app->notifications, &sequence_display_backlight_enforce_on);
+    } else {
+        notification_message(app->notifications, &sequence_display_backlight_enforce_auto);
+    }
+}
+
 // Main
 int32_t crt_clock_app(void* p) {
     UNUSED(p);
 
     CrtClockApp* app = malloc(sizeof(CrtClockApp));
-    app->running = true;
-    app->beamstart = false;
-    app->beam_x  = -(BEAM_WIDTH); // fully off-screen left
-    app->event_queue = furi_message_queue_alloc(8, sizeof(InputEvent));
+    app->running      = true;
+    app->beamstart    = false;
+    app->beam_x       = -(BEAM_WIDTH); // fully off-screen left
+    app->mode         = ScreenClock;
+    app->backlight_on = false; // default to auto
+    app->event_queue  = furi_message_queue_alloc(8, sizeof(InputEvent));
 
     // Advance beam once before registering the viewport so the very
     // first render callback never sees the raw init value
@@ -200,17 +293,36 @@ int32_t crt_clock_app(void* p) {
     Gui* gui = furi_record_open(RECORD_GUI);
     gui_add_view_port(gui, vp, GuiLayerFullscreen);
 
-    // Keep backlight on for the duration of the app
-    // NotificationApp* notifications = furi_record_open(RECORD_NOTIFICATION);
-    // notification_message(notifications, &sequence_display_backlight_enforce_on);
+    app->notifications = furi_record_open(RECORD_NOTIFICATION);
+    apply_backlight(app); // apply default (auto)
 
     InputEvent event;
     while(app->running) {
         if(furi_message_queue_get(app->event_queue, &event, 50) == FuriStatusOk) {
-            if(event.type == InputTypeShort &&
-               (event.key == InputKeyBack || event.key == InputKeyOk)) {
-                app->running = false;
+            if(event.type == InputTypeShort) {
+                if(app->mode == ScreenSettings) {
+                    if(event.key == InputKeyBack) {
+                        app->mode = ScreenClock;
+                    } else if(event.key == InputKeyOk) {
+                        app->backlight_on = !app->backlight_on;
+                        apply_backlight(app);
+                    }
+                } else {
+                    // Clock screen
+                    if(event.key == InputKeyOk) {
+                        app->mode = ScreenSettings;
+                    } else if(event.key == InputKeyBack) {
+                        app->running = false;
+                    }
+                }
             }
+        }
+
+        // Trigger beam on every 10-second mark (main loop owns all beam state)
+        DateTime trigger_dt;
+        furi_hal_rtc_get_datetime(&trigger_dt);
+        if(trigger_dt.second % 10 == 0 && !app->beamstart) {
+            app->beamstart = true;
         }
 
         if(app->beamstart) {
@@ -218,15 +330,15 @@ int32_t crt_clock_app(void* p) {
             if(app->beam_x >= SCREEN_W + TRAIL_WIDTH) {
                 app->beamstart = false; // reset to wait for the next 10-second interval
                 app->beam_x = -(BEAM_WIDTH); // wrap fully off-screen
-            } // start the beam on the first loop iteration after init
+            }
         }
 
         view_port_update(vp);
     }
 
-    // Release backlight enforce before exit
-    // notification_message(notifications, &sequence_display_backlight_enforce_auto);
-    // furi_record_close(RECORD_NOTIFICATION);
+    // Release backlight enforce on exit
+    notification_message(app->notifications, &sequence_display_backlight_enforce_auto);
+    furi_record_close(RECORD_NOTIFICATION);
 
     gui_remove_view_port(gui, vp);
     furi_record_close(RECORD_GUI);
