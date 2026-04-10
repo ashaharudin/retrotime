@@ -113,10 +113,6 @@ static void draw_time_clipped(
 // Draw the CRT border and status label
 static void draw_frame(Canvas* canvas) {
     canvas_set_color(canvas, ColorBlack);
-    //canvas_draw_frame(canvas, 0, 0, SCREEN_W, SCREEN_H);
-    //canvas_set_font(canvas, FontSecondary);
-    //canvas_draw_str(canvas, 3, 9, "[ CRT ]");
-    //canvas_draw_str(canvas, 100, 9, "_");
 }
 
 // Draw the beam: erase trail, then fill beam columns black (so
