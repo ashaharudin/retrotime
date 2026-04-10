@@ -16,9 +16,9 @@
 
 // Beam sweep config
 #define BEAM_WIDTH   4   // px -- inversion stripe width
-#define TRAIL_WIDTH  48  // px -- erased wake behind beam
+#define TRAIL_WIDTH  32  // px -- erased wake behind beam
 #define BEAM_STEP    1   // px per frame the beam advances
-#define ERASE_LEAD   20  // px -- how far the erase beam leads the reveal beam
+#define ERASE_GAP    64  // px gap between beam and start of erase zone (to leave time text visible in trail)
 
 // Screen modes
 typedef enum {
@@ -91,8 +91,9 @@ static void draw_glyph_colored(
 
 // Vertical layout constants
 // Time row sits in upper half, date row below it
-#define TIME_Y   14  // top of time glyphs
-#define DATE_Y   40  // baseline of date text row (~4px gap below time glyphs)
+#define TIME_Y      14  // top of time glyphs
+#define DATE_Y      40  // baseline of date text row (~4px gap below time glyphs)
+#define TIME_MARGIN 21  // px margin on each side of the centred time row
 
 static const char* const DAY_NAMES[8] = {
     "", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"
@@ -176,7 +177,7 @@ static void draw_settings(Canvas* canvas, CrtClockApp* app) {
     canvas_set_font(canvas, FontSecondary);
 
     canvas_draw_frame(canvas, 0, 0, SCREEN_W, SCREEN_H);
-    canvas_draw_str(canvas, 3, 9, "[ SETTINGS ]");
+    //canvas_draw_str(canvas, 3, 9, "[ SETTINGS ]");
     canvas_draw_str(canvas, 90, 9, "OK=toggle");
 
     // Backlight row
@@ -200,21 +201,28 @@ static void draw_frame(Canvas* canvas) {
     //canvas_draw_str(canvas, 100, 9, "_");
 }
 
-// Draw the beam:
-//   1. Erase lead  -- solid white stripe ahead of the beam, hides text before reveal
-//   2. Noisy trail -- LFSR noise wake behind the beam
-//   3. Beam stripe -- solid black, inversion background
+// Draw the beam zones (left to right):
+//   [x=0 ... erase to here] [gap] [noisy trail] [beam stripe]
+//
+//   erase zone   -- solid white from x=0 to beam_x-TRAIL_WIDTH-TIME_MARGIN
+//   gap          -- untouched, revealed text visible here
+//   noisy trail  -- LFSR noise, phosphor decay effect
+//   beam stripe  -- solid black, inversion background at leading edge
 static void draw_beam(Canvas* canvas, int beam_x) {
-    // 1. Erase lead: white zone from beam_x to beam_x + ERASE_LEAD
-    canvas_set_color(canvas, ColorWhite);
-    for(int x = beam_x; x < beam_x + ERASE_LEAD && x < SCREEN_W; x++) {
-        if(x < 0) continue;
-        for(int y = 0; y < SCREEN_H; y++) {
-            canvas_draw_dot(canvas, x, y);
+    // Erase zone stretches from x=0 to just before the gap
+    int erase_end = beam_x - TRAIL_WIDTH - ERASE_GAP;
+
+    // 1. Erase stripe: wipe everything from left edge to erase_end
+    if(erase_end > 0) {
+        canvas_set_color(canvas, ColorWhite);
+        for(int x = 0; x < erase_end && x < SCREEN_W; x++) {
+            for(int y = 0; y < SCREEN_H; y++) {
+                canvas_draw_dot(canvas, x, y);
+            }
         }
     }
 
-    // 2. Noisy trail behind the beam
+    // 2. Noisy trail
     static uint16_t lfsr = 0xACE1u;
     for(int x = beam_x - TRAIL_WIDTH; x < beam_x; x++) {
         if(x < 0 || x >= SCREEN_W) continue;
@@ -225,7 +233,7 @@ static void draw_beam(Canvas* canvas, int beam_x) {
         }
     }
 
-    // 3. Beam stripe black (inversion background)
+    // 3. Beam stripe
     canvas_set_color(canvas, ColorBlack);
     for(int x = beam_x; x < beam_x + BEAM_WIDTH && x < SCREEN_W; x++) {
         for(int y = 0; y < SCREEN_H; y++) {
@@ -248,18 +256,20 @@ static void render_callback(Canvas* canvas, void* ctx) {
     DateTime dt;
     furi_hal_rtc_get_datetime(&dt);
 
-    // Layer 1: frame, time and date in black
     draw_frame(canvas);
-    draw_time_clipped(canvas, &dt, ColorBlack, 0, SCREEN_W);
-    draw_date_clipped(canvas, &dt, ColorBlack, 0, SCREEN_W);
 
-    // Layers 2 & 3 only active while beam is sweeping
+    // Text and beam only drawn while beam is active.
+    // Nothing is shown before the first pass or after the erase zone
+    // wipes it -- the canvas stays blank until the beam reveals it.
     if(app->beamstart) {
-        // Layer 2: beam (erase lead + noisy trail + black stripe)
+        // Layer 1: black text only where the beam has already passed
+        draw_time_clipped(canvas, &dt, ColorBlack, 0, app->beam_x + BEAM_WIDTH);
+        draw_date_clipped(canvas, &dt, ColorBlack, 0, app->beam_x + BEAM_WIDTH);
+
+        // Layer 2: beam (erase zone + noisy trail + black stripe)
         draw_beam(canvas, app->beam_x);
 
-        // Layer 3: redraw text in WHITE only in the revealed zone
-        //          (trail behind beam, before erase lead wipes ahead)
+        // Layer 3: white text in the revealed zone (trail behind beam)
         draw_time_clipped(canvas, &dt, ColorWhite,
                           app->beam_x - TRAIL_WIDTH, app->beam_x + BEAM_WIDTH);
         draw_date_clipped(canvas, &dt, ColorWhite,
@@ -288,8 +298,8 @@ int32_t crt_clock_app(void* p) {
 
     CrtClockApp* app = malloc(sizeof(CrtClockApp));
     app->running      = true;
-    app->beamstart    = false;
-    app->beam_x       = -(BEAM_WIDTH); // fully off-screen left
+    app->beamstart    = true;
+    app->beam_x       = -(BEAM_WIDTH);
     app->mode         = ScreenClock;
     app->backlight_on = false; // default to auto
     app->event_queue  = furi_message_queue_alloc(8, sizeof(InputEvent));
@@ -330,17 +340,9 @@ int32_t crt_clock_app(void* p) {
             }
         }
 
-        // Trigger beam on every 10-second mark (main loop owns all beam state)
-        DateTime trigger_dt;
-        furi_hal_rtc_get_datetime(&trigger_dt);
-        if(trigger_dt.second % 10 == 0 && !app->beamstart) {
-            app->beamstart = true;
-        }
-
         if(app->beamstart) {
             app->beam_x += BEAM_STEP;
-            if(app->beam_x >= SCREEN_W + TRAIL_WIDTH) {
-                app->beamstart = false;
+            if(app->beam_x >= SCREEN_W + TRAIL_WIDTH + TIME_MARGIN) {
                 app->beam_x = -(BEAM_WIDTH);
             }
         }
