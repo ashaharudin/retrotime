@@ -15,10 +15,9 @@
 #define SCREEN_H 64
 
 // Beam sweep config
-#define BEAM_WIDTH   4   // px -- inversion stripe width
-#define TRAIL_WIDTH  32  // px -- erased wake behind beam
-#define BEAM_STEP    1   // px per frame the beam advances
-#define ERASE_GAP    64  // px gap between beam and start of erase zone (to leave time text visible in trail)
+#define BEAM_WIDTH   12   // px -- inversion stripe width
+#define TRAIL_WIDTH  128  // px -- erased wake behind beam
+#define BEAM_STEP    3   // px per frame the beam advances
 
 // Screen modes
 typedef enum {
@@ -93,7 +92,7 @@ static void draw_glyph_colored(
 // Time row sits in upper half, date row below it
 #define TIME_Y      14  // top of time glyphs
 #define DATE_Y      40  // baseline of date text row (~4px gap below time glyphs)
-#define TIME_MARGIN 21  // px margin on each side of the centred time row
+#define TIME_MARGIN 4  // px margin on each side of the centred time row
 
 static const char* const DAY_NAMES[8] = {
     "", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"
@@ -206,7 +205,7 @@ static void draw_frame(Canvas* canvas) {
 //   beam stripe  -- solid black, inversion background at leading edge
 static void draw_beam(Canvas* canvas, int beam_x) {
     // Erase zone stretches from x=0 to just before the gap
-    int erase_end = beam_x - TRAIL_WIDTH - ERASE_GAP;
+    int erase_end = beam_x - TRAIL_WIDTH - TIME_MARGIN;
 
     // 1. Erase stripe: wipe everything from left edge to erase_end
     if(erase_end > 0) {
@@ -338,7 +337,7 @@ int32_t crt_clock_app(void* p) {
 
         if(app->beamstart) {
             app->beam_x += BEAM_STEP;
-            if(app->beam_x >= SCREEN_W + TRAIL_WIDTH + TIME_MARGIN) {
+            if(app->beam_x >= SCREEN_W + TRAIL_WIDTH) {
                 app->beam_x = -(BEAM_WIDTH);
             }
         }
